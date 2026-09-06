@@ -17,6 +17,16 @@ float gyroYBias = 0;
 float servo1Angle = 90;
 float servo2Angle = 90;
 
+
+// ========================================
+// SERVO 2 TREMOR FILTER
+// ========================================
+
+float gyroYSlow = 0;
+float gyroYTremor = 0;
+float servo2Correction = 0;
+
+
 void readGyro(int16_t &gx, int16_t &gy, int16_t &gz)
 {
   Wire.beginTransmission(MPU_ADDR);
@@ -32,6 +42,7 @@ void readGyro(int16_t &gx, int16_t &gy, int16_t &gz)
     gz = (Wire.read() << 8) | Wire.read();
   }
 }
+
 
 void calibrate()
 {
@@ -58,6 +69,7 @@ void calibrate()
   Serial.println("CALIBRATION DONE");
 }
 
+
 void setup()
 {
   Serial.begin(115200);
@@ -70,12 +82,17 @@ void setup()
   Wire.write(0);
   Wire.endTransmission();
 
-  // Setup servos
+
+  // -----------------------------
+  // SETUP SERVOS
+  // -----------------------------
+
   servo1.setPeriodHertz(50);
   servo2.setPeriodHertz(50);
 
   servo1.attach(SERVO1_PIN, 500, 2400);
   servo2.attach(SERVO2_PIN, 500, 2400);
+
 
   // Center
   servo1.write(90);
@@ -84,7 +101,12 @@ void setup()
   delay(1000);
 
   calibrate();
+
+
+  gyroYSlow = 0;
+  servo2Correction = 0;
 }
+
 
 void loop()
 {
@@ -92,13 +114,15 @@ void loop()
 
   readGyro(gx, gy, gz);
 
+
+  // Convert gyro values
   float gyroX = (gx - gyroXBias) / 131.0;
   float gyroY = (gy - gyroYBias) / 131.0;
 
 
-  // -----------------------------
+  // ========================================
   // REMOVE SMALL SENSOR NOISE
-  // -----------------------------
+  // ========================================
 
   if (abs(gyroX) < 8)
     gyroX = 0;
@@ -107,53 +131,88 @@ void loop()
     gyroY = 0;
 
 
-  // -----------------------------
-  // SERVO 1 = UP / DOWN
-  // -----------------------------
+  // ========================================
+  // SERVO 1
+  // UP / DOWN
+  // ========================================
 
-  // Increased from 0.025 to 0.05
   servo1Angle += gyroX * 0.05;
 
 
-  // -----------------------------
-  // SERVO 2 = LEFT / RIGHT
-  // -----------------------------
-
-  servo2Angle -= gyroY * 0.05;
-
-
-  // -----------------------------
-  // LIMIT SERVO MOVEMENT
-  // -----------------------------
-
-  servo1Angle = constrain(servo1Angle, 50, 130);
-  servo2Angle = constrain(servo2Angle, 50, 130);
+  // Increased physical range
+  servo1Angle = constrain(
+    servo1Angle,
+    45,
+    135
+  );
 
 
-  // -----------------------------
-  // SIMPLE TREMOR DETECTION
-  // -----------------------------
+  // ========================================
+  // SERVO 2
+  // LEFT / RIGHT
+  // ========================================
 
-  // Only detects and reports tremor.
-  // DOES NOT affect servo movement.
+  /*
+     Separate slow intentional movement
+     from fast tremor-like movement.
+  */
 
-  if (abs(gyroX) > 100 || abs(gyroY) > 100)
-  {
-    Serial.println("TREMOR DETECTED");
-  }
+  // 2% slower slow-motion tracking
+  gyroYSlow = gyroYSlow * 0.951 + gyroY * 0.049;
 
 
-  // -----------------------------
-  // SEND POSITION TO SERVOS
-  // -----------------------------
+  // Fast component
+  gyroYTremor = gyroY - gyroYSlow;
+
+
+  // Ignore tiny fast noise
+  if (abs(gyroYTremor) < 10)
+    gyroYTremor = 0;
+
+
+  // ========================================
+  // TREMOR COMPENSATION
+  // ========================================
+
+  // 5% faster than previous 0.06 gain
+  servo2Correction -= gyroYTremor * 0.063;
+
+
+  // Slowly return toward center
+  servo2Correction *= 0.985;
+
+
+  // Maximum correction
+  servo2Correction = constrain(
+    servo2Correction,
+    -50,
+    50
+  );
+
+
+  // Servo 2 position
+  servo2Angle = 90 + servo2Correction;
+
+
+  // Physical limit
+  servo2Angle = constrain(
+    servo2Angle,
+    40,
+    140
+  );
+
+
+  // ========================================
+  // SEND TO SERVOS
+  // ========================================
 
   servo1.write((int)servo1Angle);
   servo2.write((int)servo2Angle);
 
 
-  // -----------------------------
+  // ========================================
   // DEBUG
-  // -----------------------------
+  // ========================================
 
   Serial.print("GX = ");
   Serial.print(gyroX);
@@ -161,11 +220,15 @@ void loop()
   Serial.print("   GY = ");
   Serial.print(gyroY);
 
+  Serial.print("   GY tremor = ");
+  Serial.print(gyroYTremor);
+
   Serial.print("   S1 = ");
   Serial.print(servo1Angle);
 
   Serial.print("   S2 = ");
   Serial.println(servo2Angle);
+
 
   delay(20);
 }
